@@ -13,6 +13,8 @@ const DEFAULT_HEARTBEAT_TIMEOUT_DURATION: Duration = Duration::from_secs(30);
 const DEFAULT_INITIAL_BACKOFF_DURATION: Duration = Duration::from_secs(1);
 /// Default maximum backoff duration for reconnections.
 const DEFAULT_MAX_BACKOFF_DURATION: Duration = Duration::from_secs(60);
+/// Default backoff multiplier for reconnections.
+const DEFAULT_BACKOFF_MULTIPLIER: f64 = 2.0;
 
 /// Configuration for WebSocket client behavior.
 #[non_exhaustive]
@@ -41,13 +43,13 @@ impl Default for WebSocketConfig {
 #[derive(Debug, Clone)]
 pub struct ReconnectConfig {
     /// Maximum number of reconnection attempts before giving up.
-    /// `None` means infinite retries (recommended for production).
+    /// `None` means infinite retries.
     pub max_attempts: Option<u32>,
     /// Initial backoff duration for first reconnection attempt
     pub initial_backoff: Duration,
-    /// Maximum backoff duration (cap for exponential growth)
+    /// Maximum backoff duration
     pub max_backoff: Duration,
-    /// Multiplier for exponential backoff (typically 2.0)
+    /// Multiplier for exponential backoff
     pub backoff_multiplier: f64,
 }
 
@@ -57,7 +59,7 @@ impl Default for ReconnectConfig {
             max_attempts: None, // Infinite reconnection by default
             initial_backoff: DEFAULT_INITIAL_BACKOFF_DURATION,
             max_backoff: DEFAULT_MAX_BACKOFF_DURATION,
-            backoff_multiplier: 2.0,
+            backoff_multiplier: DEFAULT_BACKOFF_MULTIPLIER,
         }
     }
 }
