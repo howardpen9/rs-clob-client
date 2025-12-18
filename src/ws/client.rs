@@ -202,7 +202,8 @@ impl<S: State> WebSocketClient<S> {
                                 });
                             }
                             _ => {
-                                yield Err(Error::validation("No bid or ask available for midpoint"));
+                                // No bid or ask available; skip midpoint
+                                continue;
                             }
                         }
                     }
