@@ -119,7 +119,7 @@ pub struct PriceChange {
 pub(crate) struct PriceChangeBatch {
     /// Market identifier shared across batch entries
     pub market: String,
-    /// Unix timestamp in milliseconds (string or number)
+    /// Unix timestamp in milliseconds
     #[serde_as(as = "DisplayFromStr")]
     pub timestamp: i64,
     /// Individual price change entries
