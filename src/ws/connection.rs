@@ -7,6 +7,7 @@ use std::result::Result as StdResult;
 use std::sync::Arc;
 use std::time::Instant;
 
+use backoff::backoff::Backoff as _;
 use futures::{
     SinkExt as _, StreamExt as _,
     stream::{SplitSink, SplitStream},
@@ -131,7 +132,8 @@ impl ConnectionManager {
         interest: Arc<InterestTracker>,
         state_tx: watch::Sender<ConnectionState>,
     ) {
-        let mut attempt = 0;
+        let mut attempt = 0_u32;
+        let mut backoff = config.reconnect.into_backoff();
 
         loop {
             // Update state to connecting
@@ -142,7 +144,8 @@ impl ConnectionManager {
             // Attempt connection
             match connect_async(&endpoint).await {
                 Ok((ws_stream, _)) => {
-                    attempt = 0; // Reset on successful connection
+                    attempt = 0;
+                    backoff.reset();
                     let connected = ConnectionState::Connected {
                         since: Instant::now(),
                     };
@@ -169,7 +172,7 @@ impl ConnectionManager {
                 Err(e) => {
                     let error = Error::with_source(Kind::WebSocket, WsError::Connection(e));
                     let _: StdResult<_, _> = broadcast_tx.send(Arc::new(Err(error)));
-                    attempt += 1;
+                    attempt = attempt.saturating_add(1);
                 }
             }
 
@@ -183,13 +186,14 @@ impl ConnectionManager {
                 break;
             }
 
-            // Update state and calculate backoff
+            // Update state and wait with exponential backoff
             let reconnecting = ConnectionState::Reconnecting { attempt };
             *state.write().await = reconnecting;
             let _: StdResult<_, _> = state_tx.send(reconnecting);
 
-            let backoff = config.reconnect.calculate_backoff(attempt);
-            sleep(backoff).await;
+            if let Some(duration) = backoff.next_backoff() {
+                sleep(duration).await;
+            }
         }
     }
 
@@ -331,7 +335,7 @@ impl ConnectionManager {
             ping_interval.tick().await;
 
             // Check if still connected
-            if !matches!(*state.read().await, ConnectionState::Connected { .. }) {
+            if !state.read().await.is_connected() {
                 break;
             }
 
@@ -410,24 +414,5 @@ impl ConnectionManager {
     #[must_use]
     pub fn state_receiver(&self) -> watch::Receiver<ConnectionState> {
         self.state_tx.subscribe()
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn connection_state_transitions() {
-        let state = ConnectionState::Disconnected;
-        assert_eq!(state, ConnectionState::Disconnected);
-
-        let state = ConnectionState::Connecting;
-        assert_eq!(state, ConnectionState::Connecting);
-
-        let state = ConnectionState::Connected {
-            since: Instant::now(),
-        };
-        assert!(matches!(state, ConnectionState::Connected { .. }));
     }
 }

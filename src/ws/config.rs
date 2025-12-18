@@ -5,6 +5,8 @@
 
 use std::time::Duration;
 
+use backoff::{ExponentialBackoff, ExponentialBackoffBuilder};
+
 /// Default heartbeat interval value.
 const DEFAULT_HEARTBEAT_INTERVAL_DURATION: Duration = Duration::from_secs(10);
 /// Default heartbeat timeout value.
@@ -65,39 +67,51 @@ impl Default for ReconnectConfig {
 }
 
 impl ReconnectConfig {
-    /// Calculate backoff duration for a given attempt number.
+    /// Create an [`ExponentialBackoff`] instance from this configuration.
     #[must_use]
-    #[expect(
-        clippy::float_arithmetic,
-        reason = "Exponential backoff requires floating-point duration calculations"
-    )]
-    pub fn calculate_backoff(&self, attempt: u32) -> Duration {
-        let attempt_i32 = i32::try_from(attempt).unwrap_or(i32::MAX);
-        let base_secs = self.initial_backoff.as_secs_f64();
-        let scaled = self.backoff_multiplier.powi(attempt_i32);
-        Duration::from_secs_f64(base_secs * scaled).min(self.max_backoff)
+    pub fn into_backoff(&self) -> ExponentialBackoff {
+        ExponentialBackoffBuilder::default()
+            .with_initial_interval(self.initial_backoff)
+            .with_max_interval(self.max_backoff)
+            .with_multiplier(self.backoff_multiplier)
+            .with_max_elapsed_time(None) // We handle max attempts separately
+            .build()
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use backoff::backoff::Backoff as _;
+
     use super::*;
 
     #[test]
-    fn backoff_calculation() {
+    fn backoff_sequence() {
         let config = ReconnectConfig::default();
+        let mut backoff = config.into_backoff();
 
-        assert_eq!(config.calculate_backoff(0), Duration::from_secs(1));
-        assert_eq!(config.calculate_backoff(1), Duration::from_secs(2));
-        assert_eq!(config.calculate_backoff(2), Duration::from_secs(4));
-        assert_eq!(config.calculate_backoff(3), Duration::from_secs(8));
+        // First backoff should be around initial_backoff (with some jitter)
+        let first = backoff.next_backoff().unwrap();
+        assert!(first >= Duration::from_millis(500) && first <= Duration::from_millis(1500));
     }
 
     #[test]
-    fn backoff_cap() {
-        let config = ReconnectConfig::default();
+    fn backoff_respects_max() {
+        let config = ReconnectConfig {
+            initial_backoff: Duration::from_secs(1),
+            max_backoff: Duration::from_secs(2),
+            backoff_multiplier: 3.0,
+            max_attempts: None,
+        };
+        let mut backoff = config.into_backoff();
 
-        // Attempt 10 would be 1024 seconds, but should be capped at 60
-        assert_eq!(config.calculate_backoff(10), Duration::from_secs(60));
+        // Exhaust several iterations
+        for _ in 0..10 {
+            let _next = backoff.next_backoff();
+        }
+
+        // Should still return values capped at max
+        let duration = backoff.next_backoff().unwrap();
+        assert!(duration <= Duration::from_secs(3));
     }
 }
