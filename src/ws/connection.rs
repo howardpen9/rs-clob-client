@@ -298,6 +298,10 @@ impl ConnectionManager {
                 break;
             }
 
+            // Mark current PONG state as seen before sending PING
+            // This prevents changed() from returning immediately due to a stale PONG
+            drop(pong_rx.borrow_and_update());
+
             // Send PING
             let ping_sent = Instant::now();
             {
@@ -316,7 +320,7 @@ impl ConnectionManager {
 
             match pong_result {
                 Ok(Ok(())) => {
-                    let last_pong = *pong_rx.borrow();
+                    let last_pong = *pong_rx.borrow_and_update();
                     if last_pong < ping_sent {
                         debug!("PONG received but older than last PING, connection may be stale");
                         break;
