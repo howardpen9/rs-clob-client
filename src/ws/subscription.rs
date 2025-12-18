@@ -107,8 +107,8 @@ impl SubscriptionManager {
         Ok(stream! {
             loop {
                 match rx.recv().await {
-                    Ok(arc_result) => {
-                        match arc_result.as_ref() {
+                    Ok(res) => {
+                        match res.as_ref() {
                             Ok(msg) => {
                                 // Filter messages by asset_id
                                 let should_yield = match msg {
@@ -189,8 +189,8 @@ impl SubscriptionManager {
         Ok(stream! {
             loop {
                 match rx.recv().await {
-                    Ok(arc_result) => {
-                        match arc_result.as_ref() {
+                    Ok(res) => {
+                        match res.as_ref() {
                             Ok(msg) => {
                                 // Only yield user messages
                                 if msg.is_user() {

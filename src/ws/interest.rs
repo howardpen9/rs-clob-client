@@ -1,8 +1,3 @@
-//! Message interest tracking for lazy deserialization.
-//!
-//! This module provides types to track which message types have active consumers,
-//! allowing the parser to skip deserialization for message types no one is consuming.
-
 use std::sync::atomic::{AtomicU8, Ordering};
 
 /// Flags representing interest in specific WebSocket message types.
