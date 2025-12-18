@@ -51,6 +51,7 @@ use crate::error::Error;
 ///     Ok(())
 /// }
 /// ```
+#[derive(Clone)]
 pub struct WebSocketClient<S: State = Unauthenticated> {
     inner: Arc<WsClientInner<S>>,
 }
