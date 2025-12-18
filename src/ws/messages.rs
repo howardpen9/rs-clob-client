@@ -3,7 +3,10 @@ use serde::{Deserialize, Serialize};
 use serde_json::{self, Value};
 use serde_with::{DisplayFromStr, serde_as};
 
-use crate::types::{Side, TraderSide};
+use crate::{
+    auth::Credentials,
+    types::{ApiKey, Side, TraderSide},
+};
 
 /// Top-level WebSocket message wrapper.
 ///
@@ -309,14 +312,13 @@ pub struct OrderMessage {
 /// Order status for WebSocket order messages.
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(rename_all = "UPPERCASE")]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum OrderStatus {
     /// Order is open and active
     Open,
     /// Order has been matched with a counterparty
     Matched,
     /// Order has been partially filled
-    #[serde(rename = "PARTIALLY_FILLED")]
     PartiallyFilled,
     /// Order has been cancelled
     Cancelled,
@@ -334,14 +336,14 @@ pub enum OrderStatus {
 pub struct SubscriptionRequest {
     /// Subscription type ("market" or "user")
     pub r#type: String,
-    /// List of market IDs (for user subscriptions)
+    /// List of market IDs
     pub markets: Vec<String>,
-    /// List of asset IDs (for market subscriptions)
+    /// List of asset IDs
     pub assets_ids: Vec<String>,
     /// Request initial state dump
     #[serde(skip_serializing_if = "Option::is_none")]
     pub initial_dump: Option<bool>,
-    /// Authentication credentials (for user subscriptions)
+    /// Authentication credentials
     #[serde(skip_serializing_if = "Option::is_none")]
     pub auth: Option<AuthPayload>,
 }
@@ -378,11 +380,21 @@ impl SubscriptionRequest {
 pub struct AuthPayload {
     /// API key (UUID)
     #[serde(rename = "apiKey")]
-    pub api_key: String,
+    pub api_key: ApiKey,
     /// API secret (base64-encoded)
     pub secret: String,
     /// API passphrase
     pub passphrase: String,
+}
+
+impl From<Credentials> for AuthPayload {
+    fn from(creds: Credentials) -> Self {
+        Self {
+            api_key: creds.key,
+            secret: creds.secret.reveal().clone(),
+            passphrase: creds.passphrase.reveal().clone(),
+        }
+    }
 }
 
 /// Calculated midpoint update (derived from orderbook).
@@ -396,7 +408,7 @@ pub struct MidpointUpdate {
     pub market: String,
     /// Calculated midpoint price
     pub midpoint: Decimal,
-    /// Unix timestamp in milliseconds (can be string or number)
+    /// Unix timestamp in milliseconds
     #[serde_as(as = "DisplayFromStr")]
     pub timestamp: i64,
 }
@@ -444,6 +456,7 @@ fn is_price_change_batch(value: &Value) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::types::ApiKey;
 
     #[test]
     fn parse_book_message() {
@@ -555,7 +568,7 @@ mod tests {
         let request = SubscriptionRequest::user(
             vec!["market1".to_owned()],
             AuthPayload {
-                api_key: "test-key".to_owned(),
+                api_key: ApiKey::nil(),
                 secret: "test-secret".to_owned(),
                 passphrase: "test-pass".to_owned(),
             },
@@ -565,7 +578,7 @@ mod tests {
         assert!(json.contains("\"type\":\"user\""));
         assert!(json.contains("\"markets\""));
         assert!(json.contains("\"auth\""));
-        assert!(json.contains("\"apiKey\":\"test-key\""));
+        assert!(json.contains(&format!("\"apiKey\":\"{}\"", ApiKey::nil())));
         assert!(json.contains("\"initial_dump\":true"));
     }
 }

@@ -247,11 +247,7 @@ impl<K: AuthKind> WebSocketClient<Authenticated<K>> {
         &self,
         markets: Vec<String>,
     ) -> Result<impl Stream<Item = Result<WsMessage>>> {
-        let auth = AuthPayload {
-            api_key: self.inner.state.credentials.key.to_string(),
-            secret: self.inner.state.credentials.secret.reveal().clone(),
-            passphrase: self.inner.state.credentials.passphrase.reveal().clone(),
-        };
+        let auth = AuthPayload::from(self.inner.state.credentials.clone());
 
         let handles = self
             .inner
