@@ -5,6 +5,7 @@ pub mod clob;
 pub mod error;
 pub mod order_builder;
 pub mod types;
+#[cfg(feature = "ws")]
 pub mod ws;
 
 use alloy::primitives::{Address, ChainId, address};
