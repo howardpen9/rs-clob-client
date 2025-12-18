@@ -80,7 +80,11 @@ impl SubscriptionManager {
         if new_assets.is_empty() {
             debug!("All requested assets already subscribed, multiplexing");
         } else {
-            debug!(count = new_assets.len(), "Subscribing to new market assets");
+            debug!(
+                count = new_assets.len(),
+                ?asset_ids,
+                "Subscribing to new market assets"
+            );
             let request = SubscriptionRequest::market(new_assets);
             self.connection.send(&request)?;
         }
