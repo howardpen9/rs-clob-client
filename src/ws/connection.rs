@@ -19,6 +19,7 @@ use tracing::{debug, warn};
 
 use super::config::WebSocketConfig;
 use super::error::WsError;
+use super::interest::InterestTracker;
 use super::messages::{SubscriptionRequest, WsMessage, parse_ws_text};
 use crate::{
     Result,
@@ -67,7 +68,14 @@ pub struct ConnectionManager {
 
 impl ConnectionManager {
     /// Create a new connection manager and start the connection loop.
-    pub fn new(endpoint: String, config: WebSocketConfig) -> Result<Self> {
+    ///
+    /// The `interest` tracker is used to determine which message types to deserialize.
+    /// Only messages that have active consumers will be fully parsed.
+    pub fn new(
+        endpoint: String,
+        config: WebSocketConfig,
+        interest: &Arc<InterestTracker>,
+    ) -> Result<Self> {
         let (sender_tx, sender_rx) = mpsc::unbounded_channel();
         let (broadcast_tx, _) = broadcast::channel(BROADCAST_CAPACITY);
 
@@ -78,6 +86,7 @@ impl ConnectionManager {
         let connection_config = config;
         let connection_endpoint = endpoint;
         let broadcast_tx_clone = broadcast_tx.clone();
+        let connection_interest = Arc::clone(interest);
 
         tokio::spawn(async move {
             Self::connection_loop(
@@ -86,6 +95,7 @@ impl ConnectionManager {
                 connection_config,
                 sender_rx,
                 broadcast_tx_clone,
+                connection_interest,
             )
             .await;
         });
@@ -104,6 +114,7 @@ impl ConnectionManager {
         config: WebSocketConfig,
         mut sender_rx: mpsc::UnboundedReceiver<String>,
         broadcast_tx: broadcast::Sender<BroadcastMessage>,
+        interest: Arc<InterestTracker>,
     ) {
         let mut attempt = 0;
 
@@ -126,6 +137,7 @@ impl ConnectionManager {
                         &broadcast_tx,
                         Arc::clone(&state),
                         &config,
+                        &interest,
                     )
                     .await
                     {
@@ -165,6 +177,7 @@ impl ConnectionManager {
         broadcast_tx: &broadcast::Sender<BroadcastMessage>,
         state: Arc<RwLock<ConnectionState>>,
         config: &WebSocketConfig,
+        interest: &Arc<InterestTracker>,
     ) -> Result<()> {
         let (write, read) = ws_stream.split();
 
@@ -193,8 +206,8 @@ impl ConnectionManager {
             write_for_messages,
             sender_rx,
             broadcast_tx,
-            &state,
             pong_tx,
+            interest,
         )
         .await;
 
@@ -210,8 +223,8 @@ impl ConnectionManager {
         write: Arc<Mutex<WsSink>>,
         sender_rx: &mut mpsc::UnboundedReceiver<String>,
         broadcast_tx: &broadcast::Sender<BroadcastMessage>,
-        _state: &Arc<RwLock<ConnectionState>>,
         pong_tx: watch::Sender<Instant>,
+        interest: &Arc<InterestTracker>,
     ) -> Result<()> {
         loop {
             tokio::select! {
@@ -225,7 +238,8 @@ impl ConnectionManager {
                                 continue;
                             }
 
-                            match parse_ws_text(&text) {
+                            // Only deserialize message types that have active consumers
+                            match parse_ws_text(&text, interest.get()) {
                                 Ok(messages) => {
                                     for ws_msg in messages {
                                         let _: StdResult<_, _> = broadcast_tx.send(Arc::new(Ok(ws_msg)));

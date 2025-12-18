@@ -14,6 +14,7 @@ use rust_decimal_macros::dec;
 
 use super::config::WebSocketConfig;
 use super::connection::{ConnectionManager, ConnectionState};
+use super::interest::InterestTracker;
 use super::messages::{
     BookUpdate, MidpointUpdate, OrderMessage, PriceChange, TradeMessage, WsMessage,
 };
@@ -337,8 +338,10 @@ struct ChannelHandles {
 
 impl ChannelHandles {
     fn connect(endpoint: String, config: &WebSocketConfig) -> Result<Self> {
-        let connection = Arc::new(ConnectionManager::new(endpoint, config.clone())?);
-        let subscriptions = Arc::new(SubscriptionManager::new(Arc::clone(&connection)));
+        // Create shared interest tracker for lazy deserialization
+        let interest = Arc::new(InterestTracker::new());
+        let connection = Arc::new(ConnectionManager::new(endpoint, config.clone(), &interest)?);
+        let subscriptions = Arc::new(SubscriptionManager::new(Arc::clone(&connection), interest));
 
         Ok(Self {
             connection,

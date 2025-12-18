@@ -7,6 +7,7 @@ pub mod client;
 pub mod config;
 pub mod connection;
 pub mod error;
+pub mod interest;
 pub mod messages;
 pub mod subscription;
 

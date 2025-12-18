@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{self, Value};
 use serde_with::{DisplayFromStr, serde_as};
 
+use super::interest::MessageInterest;
 use crate::{
     auth::Credentials,
     types::{Side, TraderSide},
@@ -408,7 +409,12 @@ pub struct MidpointUpdate {
 }
 
 /// Parse a raw WebSocket message string into one or more [`WsMessage`] instances.
-pub(crate) fn parse_ws_text(text: &str) -> serde_json::Result<Vec<WsMessage>> {
+///
+/// Messages that don't match the interest are skipped entirely, avoiding deserialization overhead.
+pub(crate) fn parse_ws_text(
+    text: &str,
+    interest: MessageInterest,
+) -> serde_json::Result<Vec<WsMessage>> {
     let trimmed = text.trim();
 
     if trimmed.is_empty() {
@@ -419,32 +425,73 @@ pub(crate) fn parse_ws_text(text: &str) -> serde_json::Result<Vec<WsMessage>> {
         let values: Vec<Value> = serde_json::from_str(trimmed)?;
         let mut messages = Vec::new();
         for value in values {
-            messages.extend(parse_ws_value(value)?);
+            messages.extend(parse_ws_value(value, interest)?);
         }
         Ok(messages)
     } else {
-        parse_ws_value(serde_json::from_str(trimmed)?)
+        parse_ws_value(serde_json::from_str(trimmed)?, interest)
     }
 }
 
-fn parse_ws_value(value: Value) -> serde_json::Result<Vec<WsMessage>> {
-    if is_price_change_batch(&value) {
-        let batch: PriceChangeBatch = serde_json::from_value(value)?;
-        Ok(batch
-            .into_price_changes()
-            .into_iter()
-            .map(WsMessage::PriceChange)
-            .collect())
-    } else {
-        serde_json::from_value(value).map(|msg| vec![msg])
-    }
-}
+/// Parse a single [`Value`] into [`Vec<WsMessage>`].
+///
+/// Routes deserialization based on `event_type` field for efficiency,
+/// avoiding the overhead of trying to deserialize into all possible message types.
+fn parse_ws_value(value: Value, interest: MessageInterest) -> serde_json::Result<Vec<WsMessage>> {
+    let event_type = value.get("event_type").and_then(Value::as_str);
 
-fn is_price_change_batch(value: &Value) -> bool {
-    matches!(
-        value.get("event_type").and_then(Value::as_str),
-        Some("price_change")
-    ) && value.get("price_changes").is_some()
+    match event_type {
+        Some("book") => {
+            if !interest.contains(MessageInterest::BOOK) {
+                return Ok(Vec::new());
+            }
+            serde_json::from_value(value).map(|b| vec![WsMessage::Book(b)])
+        }
+        Some("price_change") => {
+            if !interest.contains(MessageInterest::PRICE_CHANGE) {
+                return Ok(Vec::new());
+            }
+            // Check if it's a batch or single price change
+            if value.get("price_changes").is_some() {
+                let batch: PriceChangeBatch = serde_json::from_value(value)?;
+                Ok(batch
+                    .into_price_changes()
+                    .into_iter()
+                    .map(WsMessage::PriceChange)
+                    .collect())
+            } else {
+                serde_json::from_value(value).map(|p| vec![WsMessage::PriceChange(p)])
+            }
+        }
+        Some("tick_size_change") => {
+            if !interest.contains(MessageInterest::TICK_SIZE) {
+                return Ok(Vec::new());
+            }
+            serde_json::from_value(value).map(|t| vec![WsMessage::TickSizeChange(t)])
+        }
+        Some("last_trade_price") => {
+            if !interest.contains(MessageInterest::LAST_TRADE_PRICE) {
+                return Ok(Vec::new());
+            }
+            serde_json::from_value(value).map(|l| vec![WsMessage::LastTradePrice(l)])
+        }
+        Some("trade") => {
+            if !interest.contains(MessageInterest::TRADE) {
+                return Ok(Vec::new());
+            }
+            serde_json::from_value(value).map(|t| vec![WsMessage::Trade(t)])
+        }
+        Some("order") => {
+            if !interest.contains(MessageInterest::ORDER) {
+                return Ok(Vec::new());
+            }
+            serde_json::from_value(value).map(|o| vec![WsMessage::Order(o)])
+        }
+        _ => {
+            // Untagged fallback deserialization for unknown event types
+            serde_json::from_value(value).map(|msg| vec![msg])
+        }
+    }
 }
 
 #[cfg(test)]
@@ -521,7 +568,7 @@ mod tests {
             ]
         }"#;
 
-        let msgs = parse_ws_text(json).unwrap();
+        let msgs = parse_ws_text(json, MessageInterest::ALL).unwrap();
         assert_eq!(msgs.len(), 2);
 
         match &msgs[0] {

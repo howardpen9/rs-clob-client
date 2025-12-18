@@ -15,6 +15,7 @@ use tracing::warn;
 
 use super::connection::ConnectionManager;
 use super::error::WsError;
+use super::interest::{InterestTracker, MessageInterest};
 use super::messages::{AuthPayload, SubscriptionRequest, WsMessage};
 use crate::Result;
 
@@ -43,15 +44,17 @@ pub enum ChannelType {
 pub struct SubscriptionManager {
     connection: Arc<ConnectionManager>,
     active_subs: Arc<DashMap<String, SubscriptionInfo>>,
+    interest: Arc<InterestTracker>,
 }
 
 impl SubscriptionManager {
     /// Create a new subscription manager.
     #[must_use]
-    pub fn new(connection: Arc<ConnectionManager>) -> Self {
+    pub fn new(connection: Arc<ConnectionManager>, interest: Arc<InterestTracker>) -> Self {
         Self {
             connection,
             active_subs: Arc::new(DashMap::new()),
+            interest,
         }
     }
 
@@ -60,6 +63,8 @@ impl SubscriptionManager {
         &self,
         asset_ids: Vec<String>,
     ) -> Result<impl Stream<Item = Result<WsMessage>>> {
+        self.interest.add(MessageInterest::MARKET);
+
         // Send subscription request
         let request = SubscriptionRequest::market(asset_ids.clone());
         self.connection.send(&request)?;
@@ -121,6 +126,8 @@ impl SubscriptionManager {
         markets: Vec<String>,
         auth: AuthPayload,
     ) -> Result<impl Stream<Item = Result<WsMessage>>> {
+        self.interest.add(MessageInterest::USER);
+
         // Send authenticated subscription request
         let request = SubscriptionRequest::user(markets, auth);
         self.connection.send(&request)?;
