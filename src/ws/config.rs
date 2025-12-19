@@ -66,14 +66,12 @@ impl Default for ReconnectConfig {
     }
 }
 
-impl ReconnectConfig {
-    /// Create an [`ExponentialBackoff`] instance from this configuration.
-    #[must_use]
-    pub fn into_backoff(&self) -> ExponentialBackoff {
+impl From<ReconnectConfig> for ExponentialBackoff {
+    fn from(config: ReconnectConfig) -> Self {
         ExponentialBackoffBuilder::default()
-            .with_initial_interval(self.initial_backoff)
-            .with_max_interval(self.max_backoff)
-            .with_multiplier(self.backoff_multiplier)
+            .with_initial_interval(config.initial_backoff)
+            .with_max_interval(config.max_backoff)
+            .with_multiplier(config.backoff_multiplier)
             .with_max_elapsed_time(None) // We handle max attempts separately
             .build()
     }
@@ -88,7 +86,7 @@ mod tests {
     #[test]
     fn backoff_sequence() {
         let config = ReconnectConfig::default();
-        let mut backoff = config.into_backoff();
+        let mut backoff: ExponentialBackoff = config.into();
 
         // First backoff should be around initial_backoff (with some jitter)
         let first = backoff.next_backoff().unwrap();
@@ -103,7 +101,7 @@ mod tests {
             backoff_multiplier: 3.0,
             max_attempts: None,
         };
-        let mut backoff = config.into_backoff();
+        let mut backoff: ExponentialBackoff = config.into();
 
         // Exhaust several iterations
         for _ in 0..10 {

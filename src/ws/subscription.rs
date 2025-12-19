@@ -70,10 +70,10 @@ pub enum ChannelType {
 /// Manages active subscriptions and routes messages to subscribers.
 pub struct SubscriptionManager {
     connection: Arc<ConnectionManager>,
-    active_subs: Arc<DashMap<String, SubscriptionInfo>>,
+    active_subs: DashMap<String, SubscriptionInfo>,
     interest: Arc<InterestTracker>,
-    subscribed_assets: Arc<DashSet<String>>,
-    subscribed_markets: Arc<DashSet<String>>,
+    subscribed_assets: DashSet<String>,
+    subscribed_markets: DashSet<String>,
     last_auth: Arc<RwLock<Option<AuthPayload>>>,
 }
 
@@ -83,10 +83,10 @@ impl SubscriptionManager {
     pub fn new(connection: Arc<ConnectionManager>, interest: Arc<InterestTracker>) -> Self {
         Self {
             connection,
-            active_subs: Arc::new(DashMap::new()),
+            active_subs: DashMap::new(),
             interest,
-            subscribed_assets: Arc::new(DashSet::new()),
-            subscribed_markets: Arc::new(DashSet::new()),
+            subscribed_assets: DashSet::new(),
+            subscribed_markets: DashSet::new(),
             last_auth: Arc::new(RwLock::new(None)),
         }
     }
@@ -342,7 +342,7 @@ impl SubscriptionManager {
     pub fn active_subscriptions(&self) -> HashMap<ChannelType, Vec<SubscriptionInfo>> {
         let mut grouped: HashMap<ChannelType, Vec<SubscriptionInfo>> = HashMap::new();
 
-        for entry in self.active_subs.iter() {
+        for entry in &self.active_subs {
             grouped
                 .entry(entry.value().channel())
                 .or_default()

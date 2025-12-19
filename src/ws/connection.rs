@@ -13,7 +13,7 @@ use futures::{
     stream::{SplitSink, SplitStream},
 };
 use tokio::net::TcpStream;
-use tokio::sync::{Mutex, RwLock, broadcast, mpsc, watch};
+use tokio::sync::{RwLock, broadcast, mpsc, watch};
 use tokio::time::{interval, sleep, timeout};
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream, connect_async, tungstenite::Message};
 use tracing::{debug, warn};
@@ -133,7 +133,7 @@ impl ConnectionManager {
         state_tx: watch::Sender<ConnectionState>,
     ) {
         let mut attempt = 0_u32;
-        let mut backoff = config.reconnect.into_backoff();
+        let mut backoff: backoff::ExponentialBackoff = config.reconnect.clone().into();
 
         loop {
             // Update state to connecting
@@ -158,7 +158,7 @@ impl ConnectionManager {
                         &mut sender_rx,
                         &broadcast_tx,
                         Arc::clone(&state),
-                        &config,
+                        config.clone(),
                         &interest,
                     )
                     .await
@@ -203,7 +203,7 @@ impl ConnectionManager {
         sender_rx: &mut mpsc::UnboundedReceiver<String>,
         broadcast_tx: &broadcast::Sender<BroadcastMessage>,
         state: Arc<RwLock<ConnectionState>>,
-        config: &WebSocketConfig,
+        config: WebSocketConfig,
         interest: &Arc<InterestTracker>,
     ) -> Result<()> {
         let (write, read) = ws_stream.split();
@@ -211,27 +211,18 @@ impl ConnectionManager {
         // Channel to notify heartbeat loop when PONG is received
         let (pong_tx, pong_rx) = watch::channel(Instant::now());
 
-        // Spawn heartbeat task
-        let heartbeat_config = config.clone();
-        let write_for_heartbeat = Arc::new(Mutex::new(write));
-        let write_for_messages = Arc::clone(&write_for_heartbeat);
-        let heartbeat_state = Arc::clone(&state);
+        let (ping_tx, ping_rx) = mpsc::unbounded_channel();
 
         let heartbeat_handle = tokio::spawn(async move {
-            Self::heartbeat_loop(
-                write_for_heartbeat,
-                heartbeat_state,
-                &heartbeat_config,
-                pong_rx,
-            )
-            .await;
+            Self::heartbeat_loop(ping_tx, state, &config, pong_rx).await;
         });
 
         // Message handling loop
         let result = Self::message_loop(
             read,
-            write_for_messages,
+            write,
             sender_rx,
+            ping_rx,
             broadcast_tx,
             pong_tx,
             interest,
@@ -247,8 +238,9 @@ impl ConnectionManager {
     /// Main message handling loop.
     async fn message_loop(
         mut read: WsStreamRead,
-        write: Arc<Mutex<WsSink>>,
+        mut write: WsSink,
         sender_rx: &mut mpsc::UnboundedReceiver<String>,
+        mut ping_rx: mpsc::UnboundedReceiver<()>,
         broadcast_tx: &broadcast::Sender<BroadcastMessage>,
         pong_tx: watch::Sender<Instant>,
         interest: &Arc<InterestTracker>,
@@ -304,10 +296,16 @@ impl ConnectionManager {
                     }
                 }
 
-                // Handle outgoing messages
+                // Handle outgoing messages from subscriptions
                 Some(text) = sender_rx.recv() => {
-                    let mut write_guard = write.lock().await;
-                    if write_guard.send(Message::Text(text.into())).await.is_err() {
+                    if write.send(Message::Text(text.into())).await.is_err() {
+                        break;
+                    }
+                }
+
+                // Handle PING requests from heartbeat loop
+                Some(()) = ping_rx.recv() => {
+                    if write.send(Message::Text("PING".into())).await.is_err() {
                         break;
                     }
                 }
@@ -324,7 +322,7 @@ impl ConnectionManager {
 
     /// Heartbeat loop that sends PING messages and monitors PONG responses.
     async fn heartbeat_loop(
-        write: Arc<Mutex<WsSink>>,
+        ping_tx: mpsc::UnboundedSender<()>,
         state: Arc<RwLock<ConnectionState>>,
         config: &WebSocketConfig,
         mut pong_rx: watch::Receiver<Instant>,
@@ -343,17 +341,11 @@ impl ConnectionManager {
             // This prevents changed() from returning immediately due to a stale PONG
             drop(pong_rx.borrow_and_update());
 
-            // Send PING
+            // Send PING request to message loop
             let ping_sent = Instant::now();
-            {
-                let mut write_guard = write.lock().await;
-                if write_guard
-                    .send(Message::Text("PING".into()))
-                    .await
-                    .is_err()
-                {
-                    break;
-                }
+            if ping_tx.send(()).is_err() {
+                // Message loop has terminated
+                break;
             }
 
             // Wait for PONG within timeout
