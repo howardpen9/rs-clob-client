@@ -13,7 +13,7 @@ use tokio::net::TcpStream;
 use tokio::sync::{RwLock, broadcast, mpsc, watch};
 use tokio::time::{interval, sleep, timeout};
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream, connect_async, tungstenite::Message};
-use tracing::{debug, warn};
+use tracing::{debug, error, warn};
 
 use super::config::WebSocketConfig;
 use super::error::WsError;
@@ -23,9 +23,6 @@ use crate::{
     Result,
     error::{Error, Kind},
 };
-
-/// Broadcast message type.
-pub type BroadcastMessage = Arc<Result<WsMessage>>;
 
 type WsStream = WebSocketStream<MaybeTlsStream<TcpStream>>;
 
@@ -69,7 +66,7 @@ pub struct ConnectionManager {
     /// Sender channel for outgoing messages
     sender_tx: mpsc::UnboundedSender<String>,
     /// Broadcast sender for incoming messages
-    broadcast_tx: broadcast::Sender<BroadcastMessage>,
+    broadcast_tx: broadcast::Sender<WsMessage>,
 }
 
 impl ConnectionManager {
@@ -123,7 +120,7 @@ impl ConnectionManager {
         state: Arc<RwLock<ConnectionState>>,
         config: WebSocketConfig,
         mut sender_rx: mpsc::UnboundedReceiver<String>,
-        broadcast_tx: broadcast::Sender<BroadcastMessage>,
+        broadcast_tx: broadcast::Sender<WsMessage>,
         interest: Arc<InterestTracker>,
         state_tx: watch::Sender<ConnectionState>,
     ) {
@@ -148,7 +145,7 @@ impl ConnectionManager {
                     let _: StdResult<_, _> = state_tx.send(connected);
 
                     // Handle connection
-                    match Self::handle_connection(
+                    if let Err(e) = Self::handle_connection(
                         ws_stream,
                         &mut sender_rx,
                         &broadcast_tx,
@@ -158,15 +155,12 @@ impl ConnectionManager {
                     )
                     .await
                     {
-                        Ok(()) => {}
-                        Err(e) => {
-                            let _: StdResult<_, _> = broadcast_tx.send(Arc::new(Err(e)));
-                        }
+                        error!("Error handling connection: {e:?}");
                     }
                 }
                 Err(e) => {
                     let error = Error::with_source(Kind::WebSocket, WsError::Connection(e));
-                    let _: StdResult<_, _> = broadcast_tx.send(Arc::new(Err(error)));
+                    warn!("Unable to connect: {error:?}");
                     attempt = attempt.saturating_add(1);
                 }
             }
@@ -196,7 +190,7 @@ impl ConnectionManager {
     async fn handle_connection(
         ws_stream: WsStream,
         sender_rx: &mut mpsc::UnboundedReceiver<String>,
-        broadcast_tx: &broadcast::Sender<BroadcastMessage>,
+        broadcast_tx: &broadcast::Sender<WsMessage>,
         state: Arc<RwLock<ConnectionState>>,
         config: WebSocketConfig,
         interest: &Arc<InterestTracker>,
@@ -228,34 +222,27 @@ impl ConnectionManager {
                             match parse_ws_text(&text, interest.get()) {
                                 Ok(messages) => {
                                     for ws_msg in messages {
-                                        let _: StdResult<_, _> = broadcast_tx.send(Arc::new(Ok(ws_msg)));
+                                        let _: StdResult<_, _> = broadcast_tx.send(ws_msg);
                                     }
                                 }
                                 Err(e) => {
                                     warn!(%text, error = %e, "Failed to parse WebSocket message");
-                                    let err = Error::with_source(
-                                        Kind::WebSocket,
-                                        WsError::MessageParse(e),
-                                    );
-                                    let _: StdResult<_, _> = broadcast_tx.send(Arc::new(Err(err)));
                                 }
                             }
                         }
                         Ok(Message::Close(_)) => {
-                            let err = Error::with_source(
+                            heartbeat_handle.abort();
+                            return Err(Error::with_source(
                                 Kind::WebSocket,
                                 WsError::ConnectionClosed,
-                            );
-                            let _: StdResult<_, _> = broadcast_tx.send(Arc::new(Err(err)));
-                            break;
+                            ))
                         }
                         Err(e) => {
-                            let err = Error::with_source(
+                            heartbeat_handle.abort();
+                            return Err(Error::with_source(
                                 Kind::WebSocket,
                                 WsError::Connection(e),
-                            );
-                            let _: StdResult<_, _> = broadcast_tx.send(Arc::new(Err(err)));
-                            break;
+                            ));
                         }
                         _ => {
                             // Ignore binary frames and unsolicited PONG replies.
@@ -365,7 +352,7 @@ impl ConnectionManager {
     /// Each call returns a new independent receiver. Multiple subscribers can
     /// receive messages concurrently without blocking each other.
     #[must_use]
-    pub fn subscribe(&self) -> broadcast::Receiver<BroadcastMessage> {
+    pub fn subscribe(&self) -> broadcast::Receiver<WsMessage> {
         self.broadcast_tx.subscribe()
     }
 

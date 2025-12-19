@@ -229,12 +229,9 @@ impl SubscriptionManager {
         Ok(try_stream! {
             loop {
                 match rx.recv().await {
-                    Ok(res) => {
-                        let msg = res.as_ref().as_ref()
-                            .map_err(|e| WsError::InvalidMessage(e.to_string()))?;
-
+                    Ok(msg) => {
                         // Filter messages by asset_id
-                        let should_yield = match msg {
+                        let should_yield = match &msg {
                             WsMessage::Book(book) => asset_ids_set.contains(&book.asset_id),
                             WsMessage::PriceChange(price) => asset_ids_set.contains(&price.asset_id),
                             WsMessage::LastTradePrice(ltp) => asset_ids_set.contains(&ltp.asset_id),
@@ -243,7 +240,7 @@ impl SubscriptionManager {
                         };
 
                         if should_yield {
-                            yield msg.clone();
+                            yield msg
                         }
                     }
                     Err(RecvError::Lagged(n)) => {
@@ -316,13 +313,9 @@ impl SubscriptionManager {
         Ok(try_stream! {
             loop {
                 match rx.recv().await {
-                    Ok(res) => {
-                        let msg = res.as_ref().as_ref()
-                            .map_err(|e| WsError::InvalidMessage(e.to_string()))?;
-
-                        // Only yield user messages
+                    Ok(msg) => {
                         if msg.is_user() {
-                            yield msg.clone();
+                            yield msg;
                         }
                     }
                     Err(RecvError::Lagged(n)) => {
