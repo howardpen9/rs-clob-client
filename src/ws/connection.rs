@@ -8,10 +8,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use backoff::backoff::Backoff as _;
-use futures::{
-    SinkExt as _, StreamExt as _,
-    stream::{SplitSink, SplitStream},
-};
+use futures::{SinkExt as _, StreamExt as _};
 use tokio::net::TcpStream;
 use tokio::sync::{RwLock, broadcast, mpsc, watch};
 use tokio::time::{interval, sleep, timeout};
@@ -31,8 +28,6 @@ use crate::{
 pub type BroadcastMessage = Arc<Result<WsMessage>>;
 
 type WsStream = WebSocketStream<MaybeTlsStream<TcpStream>>;
-type WsSink = SplitSink<WsStream, Message>;
-type WsStreamRead = SplitStream<WsStream>;
 
 /// Broadcast channel capacity for incoming messages.
 const BROADCAST_CAPACITY: usize = 1024;
@@ -206,45 +201,17 @@ impl ConnectionManager {
         config: WebSocketConfig,
         interest: &Arc<InterestTracker>,
     ) -> Result<()> {
-        let (write, read) = ws_stream.split();
+        let (mut write, mut read) = ws_stream.split();
 
         // Channel to notify heartbeat loop when PONG is received
         let (pong_tx, pong_rx) = watch::channel(Instant::now());
 
-        let (ping_tx, ping_rx) = mpsc::unbounded_channel();
+        let (ping_tx, mut ping_rx) = mpsc::unbounded_channel();
 
         let heartbeat_handle = tokio::spawn(async move {
             Self::heartbeat_loop(ping_tx, state, &config, pong_rx).await;
         });
 
-        // Message handling loop
-        let result = Self::message_loop(
-            read,
-            write,
-            sender_rx,
-            ping_rx,
-            broadcast_tx,
-            pong_tx,
-            interest,
-        )
-        .await;
-
-        // Cleanup
-        heartbeat_handle.abort();
-
-        result
-    }
-
-    /// Main message handling loop.
-    async fn message_loop(
-        mut read: WsStreamRead,
-        mut write: WsSink,
-        sender_rx: &mut mpsc::UnboundedReceiver<String>,
-        mut ping_rx: mpsc::UnboundedReceiver<()>,
-        broadcast_tx: &broadcast::Sender<BroadcastMessage>,
-        pong_tx: watch::Sender<Instant>,
-        interest: &Arc<InterestTracker>,
-    ) -> Result<()> {
         loop {
             tokio::select! {
                 // Handle incoming messages
@@ -316,6 +283,9 @@ impl ConnectionManager {
                 }
             }
         }
+
+        // Cleanup
+        heartbeat_handle.abort();
 
         Ok(())
     }
