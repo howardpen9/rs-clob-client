@@ -1,4 +1,5 @@
 use std::borrow::Cow;
+use std::future::Future;
 use std::marker::PhantomData;
 use std::mem;
 use std::sync::Arc;
