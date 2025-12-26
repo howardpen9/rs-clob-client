@@ -977,15 +977,12 @@ impl Serialize for SignedOrder {
 
         // Side has to be serialized as "BUY" or "SELL" when hitting the CLOB, but the actual
         // signature for a SignedOrder has to be done on the integer representation.
-        // Rewritten from let chains for Rust 1.85 compatibility
-        if let Some(value) = order.get_mut("side") {
-            if let Some(side_numeric) = value.as_u64() {
-                if let Some(side_u8) = side_numeric.to_u8() {
-                    if let Ok(side) = Side::try_from(side_u8) {
-                        *value = Value::String(side.to_string());
-                    }
-                }
-            }
+        if let Some(value) = order.get_mut("side")
+            && let Some(side_numeric) = value.as_u64()
+            && let Some(side_numeric) = side_numeric.to_u8()
+            && let Ok(side) = Side::try_from(side_numeric)
+        {
+            *value = Value::String(side.to_string());
         }
 
         st.serialize_field("order", &order)?;
